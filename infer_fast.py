@@ -10,10 +10,9 @@ from nets import DGNLNet_fast
 from config import test_raincityscapes_path
 from misc import check_mkdir
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-
+# Устанавливаем использование CPU
+device = torch.device("cpu")
 torch.manual_seed(2019)
-torch.cuda.set_device(0)
 
 ckpt_path = './ckpt'
 exp_name = 'DGNLNet_fast'
@@ -23,69 +22,70 @@ args = {
 }
 
 transform = transforms.Compose([
-    transforms.Resize([512,1024]),
-    transforms.ToTensor() ])
+    transforms.Resize([512, 1024]),
+    transforms.ToTensor()
+])
 
-root = os.path.join(test_raincityscapes_path, 'test')
-
-#root = '/home/xwhu/Derain/real_rain'
-
+root = r'C:\Users\erd1s\Downloads\DGNL-Net-main\imagesname'
 to_pil = transforms.ToPILImage()
 
 
 def main():
-    net = DGNLNet_fast().cuda()
+    # Загружаем модель на CPU
+    net = DGNLNet_fast().to(device)
 
     if len(args['snapshot']) > 0:
-        print('load snapshot \'%s\' for testing' % args['snapshot'])
-        net.load_state_dict(torch.load(os.path.join(ckpt_path, exp_name, args['snapshot'] + '.pth'),
-                                       map_location=lambda storage, loc: storage.cuda(0)))
+        print(f'Загружаем модель "{args["snapshot"]}" для тестирования')
+        # Загружаем веса с указанием устройства - CPU
+        net.load_state_dict(
+            torch.load(
+                os.path.join(ckpt_path, exp_name, args['snapshot'] + '.pth'),
+                map_location=device
+            )
+        )
 
     net.eval()
     avg_time = 0
 
     with torch.no_grad():
-
-        img_list = [img_name for img_name in os.listdir(root)]
+        # Получаем список изображений (только с поддерживаемыми расширениями)
+        img_list = [
+            img_name for img_name in os.listdir(root)
+            if img_name.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))
+        ]
 
         for idx, img_name in enumerate(img_list):
-            check_mkdir(
-                os.path.join(ckpt_path, exp_name, '(%s) prediction_%s' % (exp_name, args['snapshot'])))
-            if len(args['depth_snapshot']) > 0:
-                check_mkdir(
-                    os.path.join(ckpt_path, exp_name, '(%s) prediction_%s' % (exp_name, args['depth_snapshot'])))
+            # Создаем директорию для результатов
+            output_dir = os.path.join(
+                ckpt_path, exp_name,
+                f'({exp_name}) prediction_{args["snapshot"]}'
+            )
+            check_mkdir(output_dir)
 
-            img = Image.open(os.path.join(root, img_name)).convert('RGB')
+            # Загружаем и преобразуем изображение
+            img_path = os.path.join(root, img_name)
+            img = Image.open(img_path).convert('RGB')
             w, h = img.size
-            img_var = Variable(transform(img).unsqueeze(0)).cuda()
+
+            # Переносим тензор на CPU
+            img_var = Variable(transform(img).unsqueeze(0)).to(device)
 
             start_time = time.time()
 
-            #res, dps = net(img_var)
+            # Обработка изображения
             res = net(img_var)
 
-            torch.cuda.synchronize()
+            # Рассчитываем время обработки
+            process_time = time.time() - start_time
+            avg_time += process_time
 
-            # if len(args['depth_snapshot']) > 0:
-            #     depth_res = depth_net(res, depth_optimize = True)
+            print(f'Обработка: {idx + 1}/{len(img_list)}, '
+                  f'текущее время: {process_time:.5f} сек, '
+                  f'среднее время: {avg_time / (idx + 1):.5f} сек')
 
-            avg_time = avg_time + time.time() - start_time
-
-            print('predicting: %d / %d, avg_time: %.5f' % (idx + 1, len(img_list), avg_time/(idx+1)))
-
+            # Преобразуем результат и сохраняем
             result = transforms.Resize((h, w))(to_pil(res.data.squeeze(0).cpu()))
-
-
-            result.save(
-                os.path.join(ckpt_path, exp_name, '(%s) prediction_%s' % (
-                    exp_name, args['snapshot']), img_name))
-
-
-            # if len(args['depth_snapshot']) > 0:
-            #     depth_result = transforms.Resize((h, w))(to_pil(dps.data.squeeze(0).cpu()))
-            #     depth_result.save(
-            #         os.path.join(ckpt_path, exp_name, '(%s) prediction_%s' % (
-            #             exp_name, args['depth_snapshot']), img_name))
+            result.save(os.path.join(output_dir, img_name))
 
 
 if __name__ == '__main__':
